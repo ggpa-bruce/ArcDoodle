@@ -1,0 +1,249 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>Arc Doodle</title>
+  <style>
+    html,
+    body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: white
+    }
+
+    #bar {
+      height: 34px;
+      display: flex;
+      align-items: center;
+      padding: 0 6px;
+      box-sizing: border-box;
+      border-bottom: 1px solid #bbb;
+      font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: white
+    }
+
+    #status {
+      margin-left: 12px;
+      color: #444
+    }
+
+    #canvas {
+      display: block;
+      background: white;
+      cursor: crosshair
+    }
+
+    #menu {
+      font: inherit
+    }
+  </style>
+</head>
+
+<body>
+  <div id="bar"><select id="menu">
+      <option value="">Menu</option>
+      <option value="undoDot">Undo Last Define Dot</option>
+      <option value="angle">Define Angle</option>
+      <option value="undoAngle">Undo Last Define Angle</option>
+      <option disabled>──────────</option>
+      <option value="showDots">Show Dots</option>
+      <option value="hideDots">Hide Dots</option>
+      <option disabled>──────────</option>
+      <option value="gridNone">Grid: None</option>
+      <option value="gridRect">Grid: Rectangular</option>
+      <option value="gridTri">Grid: Triangular — Horizontal</option>
+      <option value="gridTriV">Grid: Triangular — Vertical</option>
+      <option disabled>──────────</option>
+      <option value="instructions">Instructions</option>
+      <option value="newSheet">New Sheet</option>
+    </select><span id="status">Click to define the initial dot or angle.</span></div>
+  <div id="helpOverlay"
+    style="display:none;position:fixed;inset:0;background:white;z-index:20;overflow:auto;padding:24px;box-sizing:border-box;font:16px/1.45 sans-serif">
+    <div style="max-width:760px;margin:auto"><button id="closeHelp" style="float:right;font-size:16px">Close</button>
+      <h1>ArcDoodle</h1>
+      <p>ArcDoodle is a simple drawing program that creates curves from a series of circular arcs that blend smoothly
+        together.</p>
+      <h2>Starting with dots</h2>
+      <p>Click in the drawing area to place two or more dots. Select <b>Define Angle</b> from the menu. Move the cursor
+        around the first dot to see the possible curves through the dots. Click to set the initial angle.</p>
+      <p>Continue clicking to add dots to the curve.</p>
+      <h2>Starting with an angle</h2>
+      <p>Select <b>Define Angle</b> before placing any dots. Click to set the initial dot. Move the cursor to choose the
+        initial direction, then click to set the angle.</p>
+      <p>Move the cursor to preview the first arc. Click to set the next dot, and continue clicking to extend the curve.
+      </p>
+      <h2>Ending a curve</h2>
+      <p>Press <b>Return</b> or <b>Enter</b>. The completed curve remains on the sheet and a new curve starts
+        automatically.</p>
+      <h2>Menu</h2>
+      <p><b>Undo Last Define Dot</b> removes the most recently defined dot.</p>
+      <p><b>Undo Last Define Angle</b> removes the initial angle.</p>
+      <p><b>Grid: None / Rectangular / Triangular</b> selects the drawing grid. Dots snap to grid points. The initial
+        angle does not snap to the grid.</p>
+      <p><b>New Sheet</b> clears the drawing area.</p>
+      <p>Use a computer screen capture to save a drawing.</p>
+      <h2>Some interesting shapes</h2>
+      <p>Two dots followed by a third dot at the same location as the first forms a circle.</p>
+      <p>Three dots followed by a fourth dot at the first dot will generally produce a cusp. A particular initial angle
+        can smooth the cusp.</p>
+      <p>Four dots followed by a fifth dot at the first dot will generally produce a cusp that cannot be removed by
+        changing the initial angle.</p>
+    </div>
+  </div>
+  <canvas id="canvas"></canvas>
+  <script>
+    let dotsVisible = true;
+    window.addEventListener("DOMContentLoaded", () => { document.getElementById("closeHelp").onclick = () => document.getElementById("helpOverlay").style.display = "none"; });
+
+    const canvas = document.getElementById("canvas"), ctx = canvas.getContext("2d"), bar = document.getElementById("bar"), menu = document.getElementById("menu"), status = document.getElementById("status");
+    const fresh = () => ({ dots: [], angle: null }); let curves = [], current = fresh(), mode = "dot", grid = "none", selected = null, dragStart = null;
+    let last = { drag: null, before: null, after: null, del: null };
+    const lw = () => Math.max(1, Math.min(canvas.width, canvas.height) / 400);
+    const spacing = () => Math.min(canvas.width, canvas.height) / 20;
+    function resize() { canvas.width = innerWidth; canvas.height = innerHeight - bar.offsetHeight; redraw() } addEventListener("resize", resize);
+    function point(e) { let r = canvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top } }
+    function snap(p) {
+      let s = spacing(); if (grid === "none") return p; if (grid === "rect") return { x: Math.round(p.x / s) * s, y: Math.round(p.y / s) * s };
+      if (grid === "triV") { let h = s * Math.sqrt(3) / 2, col = Math.round(p.x / h); let span = canvas.width / Math.sqrt(3), base = -span; let off = (Math.abs(col) % 2) * s / 2; let row = Math.round((p.y - base - off) / s); return { x: col * h, y: base + row * s + off } }
+      let h = s * Math.sqrt(3) / 2, row = Math.round(p.y / h); let span = canvas.height / Math.sqrt(3), base = -span; let off = (Math.abs(row) % 2) * s / 2; let col = Math.round((p.x - base - off) / s); return { x: base + col * s + off, y: row * h }
+    }
+    function drawGrid() {
+      if (grid === "none") return; let s = spacing(); ctx.save(); ctx.strokeStyle = "#ddd"; ctx.lineWidth = Math.max(.5, lw() / 3);
+      if (grid === "rect") { for (let x = 0; x <= canvas.width; x += s) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke() } for (let y = 0; y <= canvas.height; y += s) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke() } }
+      else if (grid === "triV") { let h = s * Math.sqrt(3) / 2, span = canvas.width / Math.sqrt(3); for (let x = 0; x <= canvas.width + h; x += h) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, canvas.height); ctx.stroke() } for (let y = -span; y <= canvas.height + span; y += s) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y + span); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y - span); ctx.stroke() } }
+      else { let h = s * Math.sqrt(3) / 2, span = canvas.height / Math.sqrt(3); for (let y = 0; y <= canvas.height + h; y += h) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(canvas.width, y); ctx.stroke() } for (let x = -span; x <= canvas.width + span; x += s) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + span, canvas.height); ctx.stroke(); ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x - span, canvas.height); ctx.stroke() } } ctx.restore()
+    }
+    function dot(p) { ctx.beginPath(); ctx.arc(p.x, p.y, lw() * 2, 0, 2 * Math.PI); ctx.fillStyle = "black"; ctx.fill() }
+    function arcFrom(A, B, t) {
+      let nx = -Math.sin(t), ny = Math.cos(t), vx = B.x - A.x, vy = B.y - A.y, d = 2 * (vx * nx + vy * ny); if (Math.abs(d) < 1e-9) return { straight: true, out: Math.atan2(vy, vx) };
+      let s = (vx * vx + vy * vy) / d, cx = A.x + s * nx, cy = A.y + s * ny, r = Math.abs(s), a0 = Math.atan2(A.y - cy, A.x - cx), a1 = Math.atan2(B.y - cy, B.x - cx);
+      let dif = (u, v) => Math.abs(Math.atan2(Math.sin(u - v), Math.cos(u - v))), cc = dif(t, a0 - Math.PI / 2) < dif(t, a0 + Math.PI / 2);
+      return { cx, cy, r, a0, a1, cc, out: a1 + (cc ? -Math.PI / 2 : Math.PI / 2) }
+    }
+    function drawCurve(c) {
+      ctx.strokeStyle = "black"; ctx.lineWidth = lw(); ctx.lineCap = "round";
+      if (c.angle === null || c.dots.length < 2) { if (dotsVisible) c.dots.forEach(dot); return }
+      let t = c.angle;
+      for (let i = 0; i < c.dots.length - 1; i++) { let A = c.dots[i], B = c.dots[i + 1], a = arcFrom(A, B, t); ctx.beginPath(); if (a.straight) { ctx.moveTo(A.x, A.y); ctx.lineTo(B.x, B.y) } else ctx.arc(a.cx, a.cy, a.r, a.a0, a.a1, a.cc); ctx.stroke(); t = a.out }
+      if (dotsVisible) c.dots.forEach(dot)
+    }
+    function controls() { let r = Math.max(5, lw() * 3); ctx.save(); ctx.strokeStyle = "black"; ctx.lineWidth = Math.max(1, lw() / 2); current.dots.forEach(p => { ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 2 * Math.PI); ctx.stroke() }); ctx.restore() }
+    function redraw() { ctx.clearRect(0, 0, canvas.width, canvas.height); drawGrid(); curves.forEach(drawCurve); drawCurve(current); if (["drag", "addBefore", "addAfter", "delete"].includes(mode)) controls() }
+    function nearest(p) { let b = -1, bd = 1e99; current.dots.forEach((q, i) => { let d = Math.hypot(q.x - p.x, q.y - p.y); if (d < bd) { bd = d; b = i } }); return bd <= Math.max(12, lw() * 8) ? b : -1 }
+    function done(msg) { mode = "dot"; selected = null; menu.value = ""; redraw(); status.textContent = msg }
+    canvas.addEventListener("mousemove", e => {
+      let p = point(e);
+
+      if (mode === "angle" && current.dots.length) {
+        redraw();
+        let a = current.dots[0];
+
+        if (current.dots.length >= 2) {
+          // Preview the entire curve using the current mouse direction as the initial tangent.
+          let preview = { dots: current.dots, angle: Math.atan2(p.y - a.y, p.x - a.x) };
+          drawCurve(preview);
+        } else {
+          // With only the initial dot, show the temporary direction line.
+          ctx.beginPath();
+          ctx.strokeStyle = "black";
+          ctx.lineWidth = lw();
+          ctx.lineCap = "round";
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(p.x, p.y);
+          ctx.stroke();
+        }
+      }
+      else if (mode === "dot" && current.angle !== null && current.dots.length) {
+        // Preview the next arc while choosing the next dot.
+        redraw();
+        let q = snap(p);
+        let preview = { dots: [...current.dots, q], angle: current.angle };
+        drawCurve(preview);
+      }
+      else if (mode === "drag" && selected !== null && e.buttons === 1) {
+        current.dots[selected] = snap(p);
+        redraw();
+      }
+    });
+    canvas.addEventListener("mouseleave", () => { if (mode === "angle" || (mode === "dot" && current.angle !== null)) redraw() });
+    canvas.addEventListener("mousedown", e => {
+      if (mode !== "drag") return;
+      let p = point(e), i = nearest(p);
+      if (i < 0) { status.textContent = "Press closer to a dot."; return }
+      selected = i;
+      dragStart = { index: i, p: { ...current.dots[i] } };
+      current.dots[i] = snap(p);
+      redraw();
+      status.textContent = "Keep the mouse button down and drag.";
+    });
+
+    window.addEventListener("mouseup", e => {
+      if (mode !== "drag" || selected === null || !dragStart) return;
+      last.drag = { index: selected, p: { ...dragStart.p } };
+      selected = null;
+      dragStart = null;
+      done("Dot moved.");
+    });
+
+    canvas.addEventListener("click", e => {
+      let p = point(e);
+      if (mode === "dot") { current.dots.push(snap(p)); redraw(); status.textContent = `Dot ${current.dots.length} defined.`; return }
+      if (mode === "angle" && current.dots.length === 0) {
+        current.dots.push(snap(p));
+        redraw();
+        status.textContent = "Initial dot defined. Point in the starting direction and click.";
+        return
+      }
+      if (mode === "angle") { if (!current.dots.length) { status.textContent = "Define the initial dot first."; return } let a = current.dots[0]; current.angle = Math.atan2(p.y - a.y, p.x - a.x); done("Initial angle defined. Click to add dots."); return }
+      if (mode === "drag") return;
+      if (mode === "addBefore" || mode === "addAfter") { if (selected === null) { let i = nearest(p); if (i < 0) { status.textContent = "Click closer to a dot."; return } selected = i; status.textContent = "Now click where the new dot should go." } else { p = snap(p); let i = mode === "addBefore" ? selected : selected + 1; current.dots.splice(i, 0, p); last[mode === "addBefore" ? "before" : "after"] = { index: i }; done("Dot added.") } return }
+      if (mode === "delete") { let i = nearest(p); if (i < 0) { status.textContent = "Click closer to a dot."; return } last.del = { index: i, p: { ...current.dots[i] } }; current.dots.splice(i, 1); if (!current.dots.length) current.angle = null; done("Dot deleted.") }
+    });
+    menu.addEventListener("change", () => {
+      let c = menu.value; if (c === "showDots") { dotsVisible = true; redraw(); menu.value = ""; status.textContent = "Dots shown."; return }
+      if (c === "hideDots") { dotsVisible = false; redraw(); menu.value = ""; status.textContent = "Dots hidden."; return }
+      if (c === "instructions") { document.getElementById("helpOverlay").style.display = "block"; menu.value = ""; return }
+      if (c === "angle") {
+        mode = "angle";
+        status.textContent = current.dots.length
+          ? "Point in the starting direction and click."
+          : "Click to place the initial dot, then point in the starting direction and click.";
+        redraw(); return
+      }
+      if (c === "undoDot") { if (current.dots.length) { current.dots.pop(); status.textContent = "Last defined dot undone." } else status.textContent = "No dot to undo."; done(status.textContent); return }
+      if (c === "undoAngle") { current.angle = null; done("Initial angle undone."); return }
+      if (c === "drag") { mode = "drag"; selected = null; redraw(); status.textContent = "Press and hold on a dot, drag it, then release."; return }
+      if (c === "undoDrag") { if (last.drag && last.drag.index < current.dots.length) { current.dots[last.drag.index] = { ...last.drag.p }; last.drag = null; done("Last drag undone.") } else done("No drag to undo."); return }
+      if (c === "addBefore" || c === "addAfter") { mode = c; selected = null; redraw(); status.textContent = c === "addBefore" ? "Click the dot the new dot should come before." : "Click the dot the new dot should come after."; return }
+      if (c === "undoAddBefore" || c === "undoAddAfter") { let k = c === "undoAddBefore" ? "before" : "after"; if (last[k] && last[k].index < current.dots.length) { current.dots.splice(last[k].index, 1); last[k] = null; done("Last add undone.") } else done("Nothing to undo."); return }
+      if (c === "deleteDot") { mode = "delete"; selected = null; redraw(); status.textContent = "Click the dot to delete."; return }
+      if (c === "undoDelete") { if (last.del) { current.dots.splice(last.del.index, 0, { ...last.del.p }); last.del = null; done("Last delete undone.") } else done("Nothing to undo."); return }
+      if (c === "findInitial") { redraw(); if (current.dots.length) { let p = current.dots[0], r = Math.max(12, lw() * 7); ctx.beginPath(); ctx.lineWidth = Math.max(1, lw() / 2); ctx.arc(p.x, p.y, r, 0, 2 * Math.PI); ctx.stroke(); done("Initial dot circled.") } else done("This curve has no dots."); return }
+      if (c.startsWith("grid")) { grid = c === "gridRect" ? "rect" : c === "gridTri" ? "tri" : c === "gridTriV" ? "triV" : "none"; done(grid === "none" ? "Grid off." : grid === "rect" ? "Rectangular grid on; dots snap to intersections." : grid === "triV" ? "Vertical triangular grid on; dots snap to intersections." : "Horizontal triangular grid on; dots snap to intersections."); return }
+      if (c === "new") { if (current.dots.length) curves.push(current); current = fresh(); last = { drag: null, before: null, after: null, del: null }; done("New curve. Click to define the initial dot or angle."); return }
+      if (c === "newSheet") { curves = []; current = fresh(); last = { drag: null, before: null, after: null, del: null }; done("New sheet. Click to define the initial dot or angle."); return }
+    });
+    resize();
+
+    document.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        if (current.dots.length) {
+          curves.push(current);
+          current = fresh();
+        }
+        mode = "dot";
+        selected = null;
+        menu.value = "";
+        redraw();
+        status.textContent = "New curve. Click to define the initial dot or angle.";
+      }
+    });
+
+  </script>
+</body>
+
+</html>
